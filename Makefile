@@ -60,4 +60,5 @@ release-patch release-minor release-major: ## Regenerate, commit and tag a relea
 	git add contracts packages && \
 	git commit -m "chore: release $$NV" && \
 	git tag $$NV && \
+	git tag packages/go/$$NV && \
 	echo "Released $$NV — push with: git push && git push --tags"
