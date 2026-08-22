@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: spectral lint
+        run: npx --yes @stoplight/spectral-cli@6 lint "contracts/**/openapi.yaml"
+
+  breaking:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: oasdiff breaking check
+        run: |
+          go run github.com/oasdiff/oasdiff@latest breaking \
+            origin/${{ github.base_ref }}:contracts/auth/v1/openapi.yaml \
+            contracts/auth/v1/openapi.yaml \
+            --fail-on WARN
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: build
+        run: go -C packages/go build ./...
+      - name: test
+        run: go -C packages/go test ./...
+      - name: generated code is up to date
+        working-directory: packages/go/generated/authv1
+        run: |
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+            -config gen.yaml ../../../../contracts/auth/v1/openapi.yaml
+          git diff --exit-code -- .
+
+  regenerate:
+    # Keep committed generated code in sync after merges to main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, go]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: make generate-go tidy
+      - name: commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add contracts packages
+          if git diff --cached --quiet; then
+            echo "generated code already up to date"
+          else
+            git commit -m "chore: regenerate from contracts [skip ci]"
+            git push
+          fi

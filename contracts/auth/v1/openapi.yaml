@@ -1,0 +1,173 @@
+openapi: 3.1.0
+info:
+  title: docu-auth Internal API
+  version: 1.0.0
+  description: |
+    Internal service-to-service API served by docu-auth on its dedicated
+    internal port (`PORT_INTERNAL`, e.g. `:4001`).
+
+    These endpoints are never mounted on the public router, so the edge
+    gateway (zin) cannot expose them; the internal port should only be
+    reachable from inside the network/cluster.
+
+    Every request must carry the shared `X-Internal-Token` header. The
+    session token is passed in the `X-Session-Token` header (never in the
+    query string, so it cannot leak into access logs).
+
+    This contract replaces the former `UserService.GetUserWithOrganizations`
+    gRPC RPC from docu-proto.
+servers:
+  - url: http://localhost:4001
+    description: Local development
+security:
+  - internalToken: []
+tags:
+  - name: sessions
+    description: Session validation for calling services
+paths:
+  /internal/v1/session-user:
+    get:
+      tags: [sessions]
+      operationId: getSessionUser
+      summary: Resolve a session token to its user with organizations
+      description: |
+        Verifies the session token signature, looks up the live session,
+        and requires the account to be email-verified. Returns the session
+        with the user profile and all organization memberships.
+
+        Callers should cache positive results briefly (the response
+        represents a live session) and treat any non-200 as "not
+        authenticated" — fail closed.
+      parameters:
+        - $ref: '#/components/parameters/SessionToken'
+      responses:
+        '200':
+          description: Live, email-verified session with user and organizations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionUser'
+        '401':
+          description: Session token missing, invalid, expired, or email not verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Missing or wrong X-Internal-Token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /healthz:
+    get:
+      operationId: internalHealthz
+      summary: Internal health check (for probes hitting the internal port)
+      security: []
+      responses:
+        '200':
+          description: Service is up
+components:
+  parameters:
+    SessionToken:
+      name: X-Session-Token
+      in: header
+      required: true
+      description: Raw session token to validate
+      schema:
+        type: string
+        minLength: 1
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared secret between internal services
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    OrgMember:
+      type: object
+      description: One organization membership of the user
+      required: [id, org_member_id, name, role]
+      properties:
+        id:
+          type: string
+          description: Organization ID (UUID)
+        org_member_id:
+          type: string
+          description: Organization member ID (UUID)
+        name:
+          type: string
+          description: Organization name
+        role:
+          type: string
+          description: Member role in the organization
+    SessionUser:
+      type: object
+      description: |
+        A live session with its user profile and organization memberships.
+        Field names match the legacy wire format (`OrgMember.id` is the
+        organization ID) so existing consumers decode unchanged.
+      required:
+        - id
+        - token
+        - expires_at
+        - user_id
+        - email
+        - first_name
+        - last_name
+        - language
+        - role
+        - is_email_verified
+        - created_at
+        - updated_at
+        - organizations
+      properties:
+        id:
+          type: string
+          description: Session ID (UUID)
+        token:
+          type: string
+          description: Hashed session token
+        expires_at:
+          type: string
+          format: date-time
+        user_id:
+          type: string
+          description: User ID (UUID)
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+        language:
+          type: string
+        role:
+          type: string
+        is_email_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        organizations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgMember'

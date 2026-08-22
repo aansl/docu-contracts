@@ -1,0 +1,7 @@
+# oapi-codegen config for the docu-auth internal API client.
+# Regenerate from the repo root with `make generate-go`.
+package: authv1
+output: authv1.gen.go
+generate:
+  models: true
+  client: true
