@@ -19,8 +19,11 @@ import (
 
 // Error defines model for Error.
 type Error struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	// Code Machine-readable error code
+	Code *string `json:"code,omitempty"`
+
+	// Error Human-readable error message
+	Error string `json:"error"`
 }
 
 // OrgMember One organization membership of the user

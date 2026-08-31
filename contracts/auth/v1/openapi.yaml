@@ -92,12 +92,14 @@ components:
   schemas:
     Error:
       type: object
-      required: [code, message]
+      required: [error]
       properties:
+        error:
+          type: string
+          description: Human-readable error message
         code:
           type: string
-        message:
-          type: string
+          description: Machine-readable error code
     OrgMember:
       type: object
       description: One organization membership of the user
