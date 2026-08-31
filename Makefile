@@ -3,7 +3,7 @@ OAPI_CODEGEN := go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@
 SPECTRAL := npx --yes @stoplight/spectral-cli@6
 OASDIFF := go run github.com/oasdiff/oasdiff@latest
 
-SPECS := contracts/auth/v1/openapi.yaml
+SPECS := $(wildcard contracts/*/v*/openapi.yaml)
 
 .DEFAULT_GOAL := help
 
@@ -14,6 +14,7 @@ help: ## Show available targets
 .PHONY: generate-go
 generate-go: ## Regenerate the Go clients from contracts (add a line per contract)
 	cd packages/go/generated/authv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/auth/v1/openapi.yaml
+	cd packages/go/generated/llmv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/llm/v1/openapi.yaml
 
 .PHONY: generate-ts
 generate-ts: ## Scaffolded: TS codegen runs per contract once a TS consumer exists
@@ -38,7 +39,11 @@ lint: ## Lint all OpenAPI specs with spectral
 
 .PHONY: breaking
 breaking: ## Check for breaking changes vs BASE (default origin/main)
-	$(OASDIFF) breaking $(BASE):contracts/auth/v1/openapi.yaml contracts/auth/v1/openapi.yaml --fail-on WARN
+	@for spec in $(SPECS); do \
+	  git cat-file -e "$(BASE):$$spec" 2>/dev/null || { echo "skip $$spec (new)"; continue; }; \
+	  echo "checking $$spec"; \
+	  $(OASDIFF) breaking "$(BASE):$$spec" "$$spec" --fail-on WARN || exit 1; \
+	done
 
 .PHONY: verify
 verify: generate-go build test ## Regenerate, build and test (CI runs this)

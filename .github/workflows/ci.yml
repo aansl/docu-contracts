@@ -27,12 +27,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      # Every spec, not a hardcoded list: a contract added without being added
+      # here would silently lose its breaking-change gate, which is the one
+      # protection consumers cannot provide for themselves.
+      #
+      # A spec that is new on this branch has no base revision to diff against,
+      # so it is skipped rather than failed.
       - name: oasdiff breaking check
         run: |
-          go run github.com/oasdiff/oasdiff@latest breaking \
-            origin/${{ github.base_ref }}:contracts/auth/v1/openapi.yaml \
-            contracts/auth/v1/openapi.yaml \
-            --fail-on WARN
+          set -euo pipefail
+          status=0
+          for spec in contracts/*/v*/openapi.yaml; do
+            if ! git cat-file -e "origin/${{ github.base_ref }}:${spec}" 2>/dev/null; then
+              echo "::notice title=New contract::${spec} is new on this branch; no base revision to diff against."
+              continue
+            fi
+            echo "checking ${spec}"
+            go run github.com/oasdiff/oasdiff@latest breaking \
+              "origin/${{ github.base_ref }}:${spec}" \
+              "${spec}" \
+              --fail-on WARN || status=1
+          done
+          exit $status
 
   go:
     runs-on: ubuntu-latest

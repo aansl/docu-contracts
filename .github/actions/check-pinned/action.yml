@@ -1,0 +1,109 @@
+name: Check pinned contracts version
+description: >
+  Warn when the calling repository pins a docu-contracts Go package older than
+  the newest published tag. Reports, never fails.
+
+inputs:
+  module:
+    description: Module path to check in go.mod.
+    required: false
+    default: github.com/aansl/docu-contracts/packages/go
+  go-mod:
+    description: Path to the go.mod to read.
+    required: false
+    default: go.mod
+  fail-on-stale:
+    description: >
+      Fail the step instead of warning. Off by default and should stay off:
+      a service must be able to ship a fix without being blocked by an
+      unrelated contract release.
+    required: false
+    default: "false"
+
+outputs:
+  pinned:
+    description: Version pinned in go.mod, empty if the module is not a dependency.
+    value: ${{ steps.check.outputs.pinned }}
+  latest:
+    description: Newest published version.
+    value: ${{ steps.check.outputs.latest }}
+  stale:
+    description: "true when pinned is behind latest."
+    value: ${{ steps.check.outputs.stale }}
+
+runs:
+  using: composite
+  steps:
+    # Pinning is right: an unpinned contract lets a change in another repo break
+    # this service's build — or its runtime — with no commit here to point at,
+    # and two services building in the same hour can end up on different clients.
+    #
+    # What pinning does not do is tell you when you have fallen behind. That is
+    # the same failure the vendored migrations had: correct, reproducible, and
+    # silently stale. So this reports the gap loudly and leaves the upgrade a
+    # deliberate act.
+    - id: check
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        module='${{ inputs.module }}'
+        gomod='${{ inputs.go-mod }}'
+
+        pinned="$(awk -v m="$module" '$1==m {print $2; exit}' "$gomod" || true)"
+        if [ -z "$pinned" ]; then
+          echo "::notice title=Contracts::${module} is not a dependency of this repo; nothing to check."
+          {
+            echo "pinned="
+            echo "latest="
+            echo "stale=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # docu-contracts is public, so this needs no credentials. Go module tags
+        # for a subdirectory module are prefixed with that subdirectory.
+        prefix="${module#github.com/aansl/docu-contracts/}"
+        latest="$(git ls-remote --tags --refs https://github.com/aansl/docu-contracts.git "${prefix}/v*" \
+          | sed 's#.*/##' \
+          | sort -V \
+          | tail -1)"
+
+        if [ -z "$latest" ]; then
+          echo "::warning title=Contracts::Could not read tags from docu-contracts; skipping the staleness check."
+          {
+            echo "pinned=$pinned"
+            echo "latest="
+            echo "stale=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        {
+          echo "pinned=$pinned"
+          echo "latest=$latest"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "$pinned" = "$latest" ]; then
+          echo "contracts: pinned $pinned is current"
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # sort -V puts the older version first; if `latest` sorts first then this
+        # repo is pinned to something newer than any tag — a local replace, or a
+        # tag that was deleted. Worth saying, but not staleness.
+        newest="$(printf '%s\n%s\n' "$pinned" "$latest" | sort -V | tail -1)"
+        if [ "$newest" = "$pinned" ]; then
+          echo "::warning title=Contracts::Pinned ${pinned} is newer than the newest published tag ${latest}. Was a tag deleted, or is this a local replace?"
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "stale=true" >> "$GITHUB_OUTPUT"
+        msg="Pinned ${pinned}, newest is ${latest}. Upgrade with: go get ${module}@${latest}"
+        if [ '${{ inputs.fail-on-stale }}' = 'true' ]; then
+          echo "::error title=Contracts out of date::${msg}"
+          exit 1
+        fi
+        echo "::warning title=Contracts out of date::${msg}"

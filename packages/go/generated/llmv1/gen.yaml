@@ -1,0 +1,12 @@
+# oapi-codegen config for the docu-llm internal API client.
+# Regenerate from the repo root with `make generate-go`.
+#
+# The generated client covers /internal/v1/completions. The streaming endpoint
+# is described in the spec but SSE is not something a generated client handles
+# well, so callers keep a hand-written reader for it — the models below are
+# still the source of truth for the events it decodes.
+package: llmv1
+output: llmv1.gen.go
+generate:
+  models: true
+  client: true

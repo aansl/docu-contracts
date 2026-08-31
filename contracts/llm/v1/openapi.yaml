@@ -1,0 +1,584 @@
+openapi: 3.1.0
+info:
+  title: docu-llm Internal API
+  version: 1.0.0
+  description: |
+    Internal service-to-service API served by docu-llm on its dedicated
+    internal port (`PORT_INTERNAL`, e.g. `:4005`). Every outbound LLM call in
+    the platform goes through it.
+
+    This port holds every provider key and **zin has no route to it**; the
+    read-only dashboard API is a separate port (`:3005`) and is not described
+    here. Every request must carry the shared `X-Internal-Token` header.
+
+    The defining property of this API is that **callers never name a model.**
+    They ask for a `tier`, and the registry maps that onto an ordered chain of
+    provider bindings, so swapping a provider is a config edit in docu-llm
+    rather than a change in every caller. The response reports which binding
+    and model actually served the call, so attribution survives the
+    indirection.
+
+    Retries, fallback across the tier's chain, and the circuit breaker all live
+    behind this API. A caller that adds its own retry ladder multiplies against
+    docu-llm's — see the `attempts` and `fell_back` fields for what already
+    happened before the response was returned.
+servers:
+  - url: http://localhost:4005
+    description: Local development
+  - url: http://docu-llm:4005
+    description: In-cluster
+security:
+  - internalToken: []
+tags:
+  - name: completions
+    description: Tier-routed LLM completions
+  - name: registry
+    description: The resolved tier registry
+  - name: health
+    description: Liveness
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: llmHealthz
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, service]
+                properties:
+                  ok:
+                    type: boolean
+                  service:
+                    type: string
+                    examples: [docu-llm]
+
+  /internal/v1/models:
+    get:
+      tags: [registry]
+      operationId: getRegistry
+      summary: The resolved tier registry
+      description: |
+        Tiers, their ordered binding chains, capabilities, prices and live
+        breaker state — what a tier actually resolves to right now.
+
+        Endpoints appear; **API keys never do.** `models.json` holds only the
+        name of the environment variable a binding reads its key from, so this
+        response cannot leak one.
+      responses:
+        '200':
+          description: The resolved registry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /internal/v1/completions:
+    post:
+      tags: [completions]
+      operationId: createCompletion
+      summary: Run a completion and return the whole response
+      description: |
+        Blocks until the model has finished, then returns the content together
+        with exact usage and cost.
+
+        **The response is the contract.** docu-llm counts tokens and prices the
+        call, but publishes usage nowhere — a caller that wants to feed billing
+        does that itself from these fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompletionRequest'
+      responses:
+        '200':
+          description: The completion, with usage and cost.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompletionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/DeadlineExceeded'
+
+  /internal/v1/completions/stream:
+    post:
+      tags: [completions]
+      operationId: streamCompletion
+      summary: Run a completion and stream it back as SSE
+      description: |
+        Same request body as the non-streaming endpoint. The response is
+        `text/event-stream`; each event is one JSON `StreamEvent` object.
+
+        **A stream always terminates with either a `usage` event or an `error`
+        event, never silently.** Treat a stream that ends without one as a
+        failure — that is the only way a caller can tell a finished response
+        from a dropped connection.
+
+        Errors discovered *before* the stream opens are returned as a normal
+        JSON error with a 4xx/5xx status. Once the stream has opened the status
+        is already 200, so failures arrive as a terminal `error` event instead.
+
+        Proxies must not buffer this response; docu-llm sets
+        `X-Accel-Buffering: no` for that reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompletionRequest'
+      responses:
+        '200':
+          description: |
+            An SSE stream of `StreamEvent` objects, terminated by a `usage` or
+            `error` event.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/StreamEvent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/DeadlineExceeded'
+
+components:
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: |
+        Shared service-to-service secret. Unset is allowed in development only
+        and is enforced in production.
+
+  responses:
+    BadRequest:
+      description: Malformed body, unknown tier, or a request the provider rejected.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or wrong `X-Internal-Token`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ProviderError:
+      description: Every binding in the tier's chain failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: The tier's chain is open at the circuit breaker, or capacity was refused.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    DeadlineExceeded:
+      description: The call outlived `deadline_ms` or the caller's context.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Tier:
+      type: string
+      description: |
+        What the caller asks for instead of a model name. Which provider and
+        model serve a tier is docu-llm's `models.json` to decide.
+      enum: [feather, lite, medium, hard, worker]
+      x-enum-descriptions:
+        feather: Trivial, ultra-cheap, latency-critical.
+        lite: Short helper calls, summarisation.
+        medium: Default conversational and most agent turns.
+        hard: Planning, orchestration, final composition.
+        worker: Long batch work; throughput over latency.
+
+    Role:
+      type: string
+      description: Chat message role, matching the OpenAI vocabulary callers already speak.
+      enum: [system, user, assistant, tool]
+
+    ToolCall:
+      type: object
+      required: [id, name, arguments]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        arguments:
+          type: string
+          description: |
+            Raw JSON as the model emitted it, deliberately left unparsed.
+            Models produce invalid JSON often enough that parsing it here would
+            turn a caller-recoverable problem into a gateway error.
+
+    Message:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+        content:
+          type: string
+        name:
+          type: string
+        tool_calls:
+          type: array
+          description: Set on assistant turns that called tools.
+          items:
+            $ref: '#/components/schemas/ToolCall'
+        tool_call_id:
+          type: string
+          description: Set on tool-result turns.
+
+    Tool:
+      type: object
+      required: [name]
+      description: A function definition, passed straight through to the provider.
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        parameters:
+          type: object
+          description: JSON Schema for the function's arguments.
+          additionalProperties: true
+
+    ResponseFormat:
+      type: string
+      description: |
+        `json_object` additionally turns a reply that fails JSON extraction
+        into a retryable failure rather than returning it to the caller.
+      enum: [text, json_object]
+
+    Attribution:
+      type: object
+      required: [feature]
+      description: |
+        Who the call is for. Entirely opaque to docu-llm: recorded and
+        returned, never interpreted. This is what keeps docu-llm from needing
+        to know what an artifact or a workspace is.
+      properties:
+        org_id:
+          type: string
+        workspace_id:
+          type: string
+        user_id:
+          type: string
+        feature:
+          type: string
+          description: |
+            Required — a call without one is rejected. Examples:
+            `ai_chat.composer`, `automation.aiCall`.
+          examples: [ai_chat.composer, automation.aiCall]
+
+    CompletionRequest:
+      type: object
+      required: [tier, messages, attribution]
+      properties:
+        tier:
+          $ref: '#/components/schemas/Tier'
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Message'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tool'
+        tool_choice:
+          type: string
+        response_format:
+          $ref: '#/components/schemas/ResponseFormat'
+        max_tokens:
+          type: integer
+        temperature:
+          type: number
+          description: Omitted means the binding's own default, which is not the same as 0.
+        stop:
+          type: array
+          items:
+            type: string
+        attribution:
+          $ref: '#/components/schemas/Attribution'
+        idempotency_key:
+          type: string
+        deadline_ms:
+          type: integer
+          description: Wall-clock budget for the whole call, retries and fallback included.
+        capture:
+          type: boolean
+          description: Overrides the global capture default for this call.
+        metadata:
+          type: object
+          additionalProperties: true
+
+    UsageSource:
+      type: string
+      description: |
+        How the token counts were arrived at. Never silently mixed: a dashboard
+        showing 40% estimated tokens for a binding is telling you to fix the
+        binding, and that signal only survives if the field exists.
+      enum: [provider, estimated, unknown]
+      x-enum-descriptions:
+        provider: The provider returned a usage block; authoritative.
+        estimated: Counted locally because the provider omitted it.
+        unknown: Failed before any token was produced.
+
+    Usage:
+      type: object
+      required: [input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, source]
+      properties:
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        cache_read_tokens:
+          type: integer
+        cache_write_tokens:
+          type: integer
+        reasoning_tokens:
+          type: integer
+        source:
+          $ref: '#/components/schemas/UsageSource'
+
+    Cost:
+      type: object
+      required: [nanos, price_version]
+      description: |
+        Priced at write time from the binding's rates. `null` means the binding
+        carried no price — an unpriced call is a gap in the data, not a free
+        one.
+      properties:
+        nanos:
+          type: integer
+          format: int64
+          description: |
+            Nano-USD as an integer. A feather-tier call can cost well under a
+            micro-dollar, and summing millions of floats accumulates drift.
+        price_version:
+          type: integer
+
+    ModelInfo:
+      type: object
+      required: [tier, binding, model]
+      description: Which binding and provider model actually served the call.
+      properties:
+        tier:
+          $ref: '#/components/schemas/Tier'
+        binding:
+          type: string
+        model:
+          type: string
+
+    Timing:
+      type: object
+      required: [queued_ms, total_ms]
+      properties:
+        queued_ms:
+          type: integer
+          description: Time spent waiting on the concurrency semaphore.
+        ttft_ms:
+          type: integer
+          description: Time to first token. Absent on non-streaming calls.
+        total_ms:
+          type: integer
+
+    CompletionResponse:
+      type: object
+      required: [id, content, finish_reason, usage, cost, model, timing, attempts, fell_back]
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCall'
+        finish_reason:
+          type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+        cost:
+          oneOf:
+            - $ref: '#/components/schemas/Cost'
+            - type: 'null'
+        model:
+          $ref: '#/components/schemas/ModelInfo'
+        timing:
+          $ref: '#/components/schemas/Timing'
+        attempts:
+          type: integer
+          description: |
+            How many provider attempts this call took, including the successful
+            one. Greater than 1 means docu-llm already retried; a caller adding
+            its own ladder multiplies against this.
+        fell_back:
+          type: boolean
+          description: True when a binding later in the tier's chain served the call.
+
+    StreamEventType:
+      type: string
+      enum: [delta, tool_call_delta, tool_calls, usage, error]
+
+    StreamEvent:
+      type: object
+      required: [type]
+      description: |
+        One SSE event. Which fields are present depends on `type`: `delta`
+        carries `content`; `tool_call_delta` carries a partial `tool_call`;
+        `tool_calls` carries the assembled list; `usage` is terminal and
+        carries the same accounting as a non-streaming response; `error` is
+        terminal and carries `error` and `error_class`.
+      properties:
+        type:
+          $ref: '#/components/schemas/StreamEventType'
+        content:
+          type: string
+        index:
+          type: integer
+        tool_call:
+          $ref: '#/components/schemas/ToolCall'
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCall'
+        finish_reason:
+          type: string
+        id:
+          type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+        cost:
+          $ref: '#/components/schemas/Cost'
+        model:
+          $ref: '#/components/schemas/ModelInfo'
+        timing:
+          $ref: '#/components/schemas/Timing'
+        attempts:
+          type: integer
+        fell_back:
+          type: boolean
+        error:
+          type: string
+        error_class:
+          type: string
+
+    Price:
+      type: object
+      description: |
+        Price per million tokens. `null` when the binding carries no price — an
+        unpriced binding is a gap in the data, not a free one.
+      properties:
+        input:
+          type: number
+        output:
+          type: number
+        cache_read:
+          type: number
+        cache_write:
+          type: number
+
+    BindingView:
+      type: object
+      required: [id, model, provider, endpoint, in_flight, max_concurrency, timeout, supports, price_per_mtok, breaker]
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        provider:
+          type: string
+          description: |
+            Name of the providers block this binding inherits its endpoint and
+            key variable from. Empty when the binding sets them inline.
+        endpoint:
+          type: string
+        in_flight:
+          type: integer
+          description: Calls in flight against this binding right now.
+        max_concurrency:
+          type: integer
+        timeout:
+          type: string
+          description: Go duration string, e.g. `30s`.
+        supports:
+          type: array
+          items:
+            type: string
+            enum: [tools, streaming, json_mode]
+        price_per_mtok:
+          oneOf:
+            - $ref: '#/components/schemas/Price'
+            - type: 'null'
+        breaker:
+          type: string
+          enum: [closed, open, half_open, unknown]
+
+    TierView:
+      type: object
+      required: [tier, bindings]
+      properties:
+        tier:
+          $ref: '#/components/schemas/Tier'
+        bindings:
+          type: array
+          description: The chain, in the order it is tried.
+          items:
+            $ref: '#/components/schemas/BindingView'
+
+    RegistryView:
+      type: object
+      required: [price_version, tiers]
+      properties:
+        price_version:
+          type: integer
+        tiers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TierView'
+
+    Error:
+      type: object
+      required: [error, error_class]
+      properties:
+        error:
+          type: string
+          description: Human-readable message. Not stable; do not branch on it.
+        error_class:
+          type: string
+          description: |
+            Stable, machine-readable classification — branch on this.
+            Also recorded on the request row, so a class that spikes is
+            greppable in the dashboard.
+          examples: [bad_request, internal, deadline_exceeded, provider_error]

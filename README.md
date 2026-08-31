@@ -10,10 +10,12 @@ Replaces the former `docu-proto` repo (buf + protobuf/gRPC, Go-only).
 ```
 contracts/               # OpenAPI specs — the source of truth, edit these
   auth/v1/openapi.yaml   # docu-auth internal API (session validation)
+  llm/v1/openapi.yaml    # docu-llm internal API (tier-routed completions)
 packages/
   go/                    # self-contained Go module
     httpx/               # shared internal client: timeouts, retries, X-Internal-Token
     generated/authv1/    # oapi-codegen client for contracts/auth/v1
+    generated/llmv1/     # oapi-codegen client for contracts/llm/v1
 ```
 
 ## Conventions for internal APIs
