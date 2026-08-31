@@ -93,13 +93,27 @@ components:
     Error:
       type: object
       required: [error]
+      description: |
+        The platform-wide error envelope. Branch on `error_class`, never on
+        `error` — the message is prose and is not stable.
       properties:
         error:
           type: string
-          description: Human-readable error message
+          description: Human-readable message. Not stable; do not branch on it.
+        error_class:
+          type: string
+          description: |
+            Stable, machine-readable classification. Named to match docu-llm's
+            envelope so one error shape holds across the platform.
+          examples: [session_user_error, unauthorized]
         code:
           type: string
-          description: Machine-readable error code
+          deprecated: true
+          x-deprecated-reason: Renamed to error_class; same value, removed in a future release.
+          description: |
+            Deprecated alias for `error_class`, carrying the identical value.
+            Emitted for one release so existing consumers keep working through
+            the rename; read `error_class` instead.
     OrgMember:
       type: object
       description: One organization membership of the user

@@ -17,13 +17,24 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-// Error defines model for Error.
+// Error The platform-wide error envelope. Branch on `error_class`, never on
+// `error` — the message is prose and is not stable.
 type Error struct {
-	// Code Machine-readable error code
+	// Code Deprecated alias for `error_class`, carrying the identical value.
+	// Emitted for one release so existing consumers keep working through
+	// the rename; read `error_class` instead.
+	// Deprecated: Renamed to error_class; same value, removed in a future release.
 	Code *string `json:"code,omitempty"`
 
-	// Error Human-readable error message
+	// Error Human-readable message. Not stable; do not branch on it.
 	Error string `json:"error"`
+
+	// ErrorClass Stable, machine-readable classification. Named to match docu-llm's
+	// envelope so one error shape holds across the platform.
+	//
+	//
+	// Examples: session_user_error, unauthorized
+	ErrorClass *string `json:"error_class,omitempty"`
 }
 
 // OrgMember One organization membership of the user
