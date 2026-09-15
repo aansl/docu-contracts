@@ -15,6 +15,7 @@ help: ## Show available targets
 generate-go: ## Regenerate the Go clients from contracts (add a line per contract)
 	cd packages/go/generated/authv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/auth/v1/openapi.yaml
 	cd packages/go/generated/llmv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/llm/v1/openapi.yaml
+	cd packages/go/generated/servicev1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/service/v1/openapi.yaml
 
 .PHONY: generate-ts
 generate-ts: ## Scaffolded: TS codegen runs per contract once a TS consumer exists
@@ -52,7 +53,7 @@ verify: generate-go build test ## Regenerate, build and test (CI runs this)
 .PHONY: release-patch release-minor release-major
 release-patch release-minor release-major: ## Regenerate, commit and tag a release (usage: make release-patch)
 	$(MAKE) generate-go tidy
-	@V=$$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0); \
+	@V=$$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0.0); \
 	MAJOR=$$(echo $$V | cut -d. -f1 | tr -d v); \
 	MINOR=$$(echo $$V | cut -d. -f2); \
 	PATCH=$$(echo $$V | cut -d. -f3); \
