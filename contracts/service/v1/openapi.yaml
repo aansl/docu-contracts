@@ -1,0 +1,127 @@
+openapi: 3.1.0
+info:
+  title: docu-service Internal API
+  version: 1.0.0
+  description: |
+    Internal service-to-service API served by docu-service on its dedicated
+    internal port (`PORT_INTERNAL`, e.g. `:4002`).
+
+    These endpoints are never mounted on the public router, so the edge
+    gateway (zin) cannot expose them; the internal port should only be
+    reachable from inside the network/cluster.
+
+    Every request must carry the shared `X-Internal-Token` header.
+servers:
+  - url: http://localhost:4002
+    description: Local development
+security:
+  - internalToken: []
+tags:
+  - name: workspaces
+    description: Workspace creation for calling services
+paths:
+  /internal/v1/workspaces:
+    post:
+      tags: [workspaces]
+      operationId: createWorkspaceInternal
+      summary: Create a workspace on behalf of a caller that already knows the org/member
+      description: |
+        Creates a workspace the same way the public `POST /org/{org_id}/workspaces`
+        endpoint does, except org and member are supplied directly in the
+        request body instead of being derived from a live session — for
+        callers (like docu-auth, right after creating an organization) that
+        already hold those IDs and have no session of their own to present.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceInternalRequest'
+      responses:
+        '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceInternal'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Missing or wrong X-Internal-Token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /healthz:
+    get:
+      operationId: internalHealthz
+      summary: Internal health check (for probes hitting the internal port)
+      security: []
+      responses:
+        '200':
+          description: Service is up
+components:
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared secret between internal services
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      description: |
+        The platform-wide error envelope. Branch on `error_class`, never on
+        `error` — the message is prose and is not stable.
+      properties:
+        error:
+          type: string
+          description: Human-readable message. Not stable; do not branch on it.
+        error_class:
+          type: string
+          description: |
+            Stable, machine-readable classification. Named to match docu-llm's
+            envelope so one error shape holds across the platform.
+          examples: [validation_error, invalid_internal_token]
+        code:
+          type: string
+          deprecated: true
+          x-deprecated-reason: Renamed to error_class; same value, removed in a future release.
+          description: |
+            Deprecated alias for `error_class`, carrying the identical value.
+            Emitted for one release so existing consumers keep working through
+            the rename; read `error_class` instead.
+    CreateWorkspaceInternalRequest:
+      type: object
+      required: [org_id, org_member_id, name]
+      properties:
+        org_id:
+          type: string
+          description: Organization ID (UUID)
+        org_member_id:
+          type: string
+          description: |
+            Organization member ID (UUID) of the workspace's owner-to-be —
+            must already exist as an `organization_member` row.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+    WorkspaceInternal:
+      type: object
+      required: [workspace_id]
+      properties:
+        workspace_id:
+          type: string
+          description: Workspace ID (UUID)

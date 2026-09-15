@@ -1,0 +1,7 @@
+# oapi-codegen config for the docu-service internal API client.
+# Regenerate from the repo root with `make generate-go`.
+package: servicev1
+output: servicev1.gen.go
+generate:
+  models: true
+  client: true
