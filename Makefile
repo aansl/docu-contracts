@@ -16,6 +16,7 @@ generate-go: ## Regenerate the Go clients from contracts (add a line per contrac
 	cd packages/go/generated/authv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/auth/v1/openapi.yaml
 	cd packages/go/generated/llmv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/llm/v1/openapi.yaml
 	cd packages/go/generated/servicev1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/service/v1/openapi.yaml
+	cd packages/go/generated/waitlistv1 && $(OAPI_CODEGEN) -config gen.yaml ../../../../contracts/waitlist/v1/openapi.yaml
 
 .PHONY: generate-ts
 generate-ts: ## Scaffolded: TS codegen runs per contract once a TS consumer exists

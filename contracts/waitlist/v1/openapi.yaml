@@ -1,0 +1,89 @@
+openapi: 3.1.0
+info:
+  title: docu-waitlist Internal Intake API
+  version: 1.0.0
+  description: |
+    Authenticated product-question answers are accepted on docu-waitlist's
+    dedicated internal port. This API is never routed through the edge gateway.
+servers:
+  - url: http://localhost:4007
+    description: Local development
+security:
+  - internalToken: []
+tags:
+  - name: intake
+    description: Product-question answers associated with an authenticated user
+paths:
+  /internal/v1/responses:
+    post:
+      tags: [intake]
+      operationId: saveIntakeResponse
+      summary: Save the latest answer to a product question
+      description: |
+        The caller resolves the user from an authenticated session. Repeating
+        this call for the same user and question key replaces the previous answer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntakeResponseRequest'
+      responses:
+        '204':
+          description: Answer saved
+        '400':
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Missing or incorrect internal token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid user ID, question key, or response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Intake service unavailable or not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared secret between internal services
+  schemas:
+    IntakeResponseRequest:
+      type: object
+      additionalProperties: false
+      required: [user_id, question_key, response]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        question_key:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,99}$'
+          maxLength: 100
+        response:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    Error:
+      type: object
+      required: [error, error_class]
+      properties:
+        error:
+          type: string
+        error_class:
+          type: string
