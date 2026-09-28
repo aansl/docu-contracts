@@ -1,0 +1,6 @@
+# Regenerate from the repo root with `make generate-go`.
+package: waitlistv1
+output: waitlistv1.gen.go
+generate:
+  models: true
+  client: true
